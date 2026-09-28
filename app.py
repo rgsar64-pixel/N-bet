@@ -11,7 +11,7 @@ import holidays
 # SAYFA VE VERİ TABANI AYARLARI
 # ==========================================
 st.set_page_config(
-    page_title="Aylık ve Kumülatif Nöbet Sistemi",
+    page_title="Aylık ve Kümilatif Nöbet Sistemi",
     page_icon="📅",
     layout="wide"
 )
@@ -28,10 +28,36 @@ def init_db():
                     kategori TEXT,
                     personel TEXT
                 )''')
+    c.execute('''CREATE TABLE IF NOT EXISTS personeller (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    isim TEXT UNIQUE
+                )''')
     conn.commit()
     conn.close()
 
 init_db()
+
+def db_personel_getir():
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("CREATE TABLE IF NOT EXISTS personeller (id INTEGER PRIMARY KEY AUTOINCREMENT, isim TEXT UNIQUE)")
+    c.execute("SELECT isim FROM personeller ORDER BY id ASC")
+    rows = c.fetchall()
+    conn.close()
+    if rows:
+        return [r[0] for r in rows]
+    return ["Ali", "Ayşe", "Mehmet", "Fatma", "Can", "Zeynep", "Mustafa", "Elif"]
+
+def db_personel_kaydet(personel_listesi):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("CREATE TABLE IF NOT EXISTS personeller (id INTEGER PRIMARY KEY AUTOINCREMENT, isim TEXT UNIQUE)")
+    c.execute("DELETE FROM personeller")
+    for p in personel_listesi:
+        if p.strip():
+            c.execute("INSERT OR IGNORE INTO personeller (isim) VALUES (?)", (p.strip(),))
+    conn.commit()
+    conn.close()
 
 def db_gecmis_nobetleri_getir():
     conn = sqlite3.connect(DB_FILE)
@@ -42,7 +68,6 @@ def db_gecmis_nobetleri_getir():
 def db_ay_kaydet(df_ay, yil_ay_str):
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    # Önce o ayın eski verisi varsa temizle (üzerine yazma mantığı)
     c.execute("DELETE FROM nobetler WHERE yil_ay = ?", (yil_ay_str,))
     
     for _, row in df_ay.iterrows():
@@ -56,7 +81,7 @@ def db_ay_kaydet(df_ay, yil_ay_str):
 # ARAYÜZ BAŞLIĞI VE AY SEÇİMİ
 # ==========================================
 st.title("📅 Aylık Nöbet Dağıtım ve Takip Sistemi")
-st.caption("Aylık Manuel Düzenleme & Veri Tabanı Destekli Kumülatif Adalet Dengesi")
+st.caption("Aylık Manuel Düzenleme, X'li Çizelge Görünümü & Veri Tabanı Destekli Kumülatif Adalet Dengesi")
 
 st.sidebar.header("⚙️ Ay ve Yıl Seçimi")
 simdiki_yil = datetime.now().year
@@ -72,22 +97,40 @@ if st.sidebar.button("🗑️ Veri Tabanını Sıfırla (Tüm Geçmişi Sil)"):
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     c.execute("DELETE FROM nobetler")
+    c.execute("DELETE FROM personeller")
     conn.commit()
     conn.close()
     st.sidebar.success("Veri tabanı temizlendi!")
     st.rerun()
 
 # ==========================================
-# 1. BÖLÜM: PERSONEL VE GEÇMİŞ İSTATİSTİKLER
+# 1. BÖLÜM: PERSONEL KADROSU
 # ==========================================
-st.header("1. Personel Kadrosu ve Geçmiş İstatistikler")
+st.header("1. Personel Kadrosu (Kalıcı Kayıt)")
 
-personel_metni = st.text_area(
-    "Personel İsimleri (Her satıra bir isim):",
-    value="Ali\nAyşe\nMehmet\nFatma\nCan\nZeynep\nMustafa\nElif",
-    height=150
-)
-personel_listesi = [p.strip() for p in personel_metni.split("\n") if p.strip()]
+kayitli_personeller = db_personel_getir()
+varsayilan_metin = "\n".join(kayitli_personeller)
+
+col_pers1, col_pers2 = st.columns([3, 1])
+
+with col_pers1:
+    personel_metni = st.text_area(
+        "Personel İsimleri (Her satıra bir isim):",
+        value=varsayilan_metin,
+        height=160,
+        help="İsimleri girdikten sonra 'Personel Kadrosunu Kaydet' butonuna basarsanız veya nöbet oluşturduğunuzda isimleriniz otomatik saklanır."
+    )
+    personel_listesi = [p.strip() for p in personel_metni.split("\n") if p.strip()]
+
+with col_pers2:
+    st.write(" ")
+    st.write(" ")
+    if st.button("💾 Personel Kadrosunu Kaydet", use_container_width=True):
+        if personel_listesi:
+            db_personel_kaydet(personel_listesi)
+            st.success("✅ Personel isimleri veri tabanına kaydedildi!")
+        else:
+            st.error("Lütfen en az bir personel ismi girin.")
 
 df_gecmis_tum = db_gecmis_nobetleri_getir()
 
@@ -110,7 +153,6 @@ if not df_gecmis_tum.empty:
             elif g_adi == "Cumartesi": gecmis_stats[p]["cmt"] += 1
             elif g_adi == "Pazar": gecmis_stats[p]["paz"] += 1
 
-# Geçmiş istatistik tablosunu göster
 df_gecmis_ozet = pd.DataFrame([
     {
         "Personel": p,
@@ -134,13 +176,11 @@ with st.expander("📊 Veri Tabanındaki Geçmiş Toplam Nöbet İstatistikleri 
 st.divider()
 st.header(f"2. {secilen_ay_adi} {secilen_yil} İzin ve Tatil Takvimi")
 
-# Ayın gün sayısını bul
 _, ay_gun_sayisi = calendar.monthrange(secilen_yil, secilen_ay_num)
 ay_baslangic = date(secilen_yil, secilen_ay_num, 1)
 ay_bitis = date(secilen_yil, secilen_ay_num, ay_gun_sayisi)
 ay_tarihleri = [ay_baslangic + timedelta(days=i) for i in range(ay_gun_sayisi)]
 
-# Otomatik Türkiye Tatilleri
 tr_holidays = holidays.TR(years=[secilen_yil])
 otomatik_tatil_dict = {dt: name for dt, name in tr_holidays.items() if ay_baslangic <= dt <= ay_bitis}
 
@@ -197,7 +237,6 @@ def aylik_kumulatif_nobet_hesapla(personel, yil, ay, izinler, tatiller_set, gecm
         for g in tum_gunler:
             nobet[(p, g)] = model.NewBoolVar(f'nobet_p{p}_g{g}')
 
-    # Kısıtlar
     for g in tum_gunler:
         model.AddExactlyOne(nobet[(p, g)] for p in tum_personeller)
 
@@ -210,7 +249,6 @@ def aylik_kumulatif_nobet_hesapla(personel, yil, ay, izinler, tatiller_set, gecm
             if 0 <= g_indeks < gun_sayisi:
                 model.Add(nobet[(p, g_indeks)] == 0)
 
-    # Çapraz Hafta Kuralı
     toplam_hafta = (gun_sayisi + 6) // 7
     for h in range(toplam_hafta):
         per, cum, cmt, paz = h * 7 + 3, h * 7 + 4, h * 7 + 5, h * 7 + 6
@@ -220,8 +258,6 @@ def aylik_kumulatif_nobet_hesapla(personel, yil, ay, izinler, tatiller_set, gecm
             if cum < gun_sayisi and paz < gun_sayisi:
                 model.Add(nobet[(p, cum)] + nobet[(p, paz)] <= 1)
 
-    # KUMÜLATİF EŞİTLİK (Geçmiş + Bu Ay)
-    # 1. Toplam Nöbet Eşitliği
     toplam_gecmis = sum(gecmis_stats[p]["toplam"] for p in personel)
     yeni_toplam_hedef = toplam_gecmis + gun_sayisi
     min_tot = yeni_toplam_hedef // num_personel
@@ -230,7 +266,6 @@ def aylik_kumulatif_nobet_hesapla(personel, yil, ay, izinler, tatiller_set, gecm
         gecmis_val = gecmis_stats[isim]["toplam"]
         model.AddLinearConstraint(gecmis_val + sum(nobet[(p, g)] for g in tum_gunler), min_tot, max_tot)
 
-    # 2. Hafta Sonu Kumülatif Eşitlik
     toplam_gecmis_hs = sum(gecmis_stats[p]["hs"] for p in personel)
     yeni_hs_hedef = toplam_gecmis_hs + len(hafta_sonu_gunleri)
     min_hs = yeni_hs_hedef // num_personel
@@ -239,7 +274,6 @@ def aylik_kumulatif_nobet_hesapla(personel, yil, ay, izinler, tatiller_set, gecm
         gecmis_hs_val = gecmis_stats[isim]["hs"]
         model.AddLinearConstraint(gecmis_hs_val + sum(nobet[(p, g)] for g in hafta_sonu_gunleri), min_hs, max_hs)
 
-    # 3. Bayram Kumülatif Eşitlik
     if bayram_gunleri:
         toplam_gecmis_bayram = sum(gecmis_stats[p]["bayram"] for p in personel)
         yeni_bayram_hedef = toplam_gecmis_bayram + len(bayram_gunleri)
@@ -287,7 +321,39 @@ def aylik_kumulatif_nobet_hesapla(personel, yil, ay, izinler, tatiller_set, gecm
         return None
 
 # ==========================================
-# 4. BÖLÜM: OTOMATİK OLUŞTURMA VE MANUEL DÜZENLEME
+# X'Lİ MATRİS / ÇİZELGE OLUŞTURMA FONKSİYONU
+# ==========================================
+def cizelge_matrisi_olustur(df_ay, personel_listesi, yil, ay):
+    _, gun_sayisi = calendar.monthrange(yil, ay)
+    gun_sutunlari = [f"{g:02d}" for g in range(1, gun_sayisi + 1)]
+    
+    # Matris hazırlığı
+    matris_data = {p: {g_str: "" for g_str in gun_sutunlari} for p in personel_listesi}
+    
+    # Nöbetçi olan günlere X koy
+    for _, row in df_ay.iterrows():
+        p = row["Nöbetçi Personel"]
+        g_str = str(row["Gün"]).zfill(2)
+        if p in matris_data and g_str in matris_data[p]:
+            matris_data[p][g_str] = "X"
+            
+    rows = []
+    for p in personel_listesi:
+        row_dict = {"Personel": p}
+        toplam_x = 0
+        for g_str in gun_sutunlari:
+            val = matris_data[p][g_str]
+            row_dict[g_str] = val
+            if val == "X":
+                toplam_x += 1
+        row_dict["Aylık Toplam"] = toplam_x
+        rows.append(row_dict)
+        
+    df_cizelge = pd.DataFrame(rows)
+    return df_cizelge
+
+# ==========================================
+# 4. BÖLÜM: OTOMATİK OLUŞTURMA VE GÖRÜNÜMLER
 # ==========================================
 st.divider()
 
@@ -298,68 +364,76 @@ with col_btn1:
         if len(personel_listesi) < 2:
             st.error("En az 2 personel girmelisiniz.")
         else:
+            db_personel_kaydet(personel_listesi) # Otomatik kaydet
             with st.spinner("Geçmiş veri tabanı okunarak adil nöbet taslağı hazırlanıyor..."):
                 df_taslak = aylik_kumulatif_nobet_hesapla(
                     personel_listesi, secilen_yil, secilen_ay_num, izinler, resmi_tatil_set, gecmis_stats
                 )
                 if df_taslak is not None:
                     st.session_state['aktif_taslak'] = df_taslak
-                    st.success("✅ Nöbet taslağı oluşturuldu! Aşağıdaki tablodan kontrol edip gerekiyorsa manuel değiştirebilirsiniz.")
+                    st.success("✅ Nöbet taslağı oluşturuldu!")
                 else:
                     st.error("❌ Çakışan izinler nedeniyle nöbet üretilemedi. İzinleri esnetip tekrar deneyin.")
 
-# Var olan aktif taslağı veya veri tabanındaki kaydı getir
 if 'aktif_taslak' not in st.session_state:
-    # Eğer bu ay daha önce DB'ye kaydedilmişse onu yükle
     df_db_ay = df_gecmis_tum[df_gecmis_tum['yil_ay'] == yil_ay_key]
     if not df_db_ay.empty:
         st.session_state['aktif_taslak'] = df_db_ay.rename(columns={
             "tarih": "Tarih", "gun_adi": "Gün Adı", "kategori": "Kategori", "personel": "Nöbetçi Personel"
         })[["Tarih", "Gün Adı", "Kategori", "Nöbetçi Personel"]]
-        # Gün kolonunu ekle
         st.session_state['aktif_taslak']["Gün"] = st.session_state['aktif_taslak']["Tarih"].apply(lambda x: str(x).split("-")[-1])
 
 if 'aktif_taslak' in st.session_state:
-    st.subheader(f"✏️ {secilen_ay_adi} {secilen_yil} Nöbet Listesi (Manuel Düzenlenebilir)")
-    st.info("💡 **Nasıl Değiştirilir?** 'Nöbetçi Personel' sütunundaki isimlere tıklayıp listeden farklı bir personel seçerek manuel değişiklik yapabilirsiniz.")
+    st.subheader(f"📋 {secilen_ay_adi} {secilen_yil} Nöbet Planı ve Çizelgesi")
+    
+    tab_liste, tab_cizelge = st.tabs(["✏️ Manuel Düzenlenebilir Liste Görünümü", "📊 Günlük X'li Çizelge Görünümü"])
 
-    # İnteraktif Tablo (st.data_editor)
-    edited_df = st.data_editor(
-        st.session_state['aktif_taslak'],
-        column_config={
-            "Nöbetçi Personel": st.column_config.SelectboxColumn(
-                "Nöbetçi Personel",
-                help="Değiştirmek istediğiniz personeli seçin",
-                width="medium",
-                options=personel_listesi,
-                required=True
-            ),
-            "Tarih": st.column_config.Column(disabled=True),
-            "Gün Adı": st.column_config.Column(disabled=True),
-            "Kategori": st.column_config.Column(disabled=True),
-            "Gün": st.column_config.Column(disabled=True)
-        },
-        hide_index=True,
-        use_container_width=True,
-        key="nobet_editor"
-    )
+    with tab_liste:
+        st.info("💡 **Nasıl Değiştirilir?** 'Nöbetçi Personel' sütunundaki isimlere tıklayıp farklı bir personel seçerek manuel değişiklik yapabilirsiniz.")
+        
+        edited_df = st.data_editor(
+            st.session_state['aktif_taslak'],
+            column_config={
+                "Nöbetçi Personel": st.column_config.SelectboxColumn(
+                    "Nöbetçi Personel",
+                    help="Değiştirmek istediğiniz personeli seçin",
+                    width="medium",
+                    options=personel_listesi,
+                    required=True
+                ),
+                "Tarih": st.column_config.Column(disabled=True),
+                "Gün Adı": st.column_config.Column(disabled=True),
+                "Kategori": st.column_config.Column(disabled=True),
+                "Gün": st.column_config.Column(disabled=True)
+            },
+            hide_index=True,
+            use_container_width=True,
+            key="nobet_editor"
+        )
 
-    # VERİ TABANINA KAYDET
-    if st.button("💾 Manuel Değişiklikleri Veri Tabanına Kaydet", type="secondary", use_container_width=True):
-        db_ay_kaydet(edited_df, yil_ay_key)
-        st.session_state['aktif_taslak'] = edited_df
-        st.success(f"✅ {secilen_ay_adi} {secilen_yil} nöbetleri veri tabanına başarıyla işlendi! Artık sonraki aylar bu değişiklikleri hesaba katacak.")
-        st.rerun()
+        if st.button("💾 Manuel Değişiklikleri Veri Tabanına Kaydet", type="secondary", use_container_width=True):
+            db_ay_kaydet(edited_df, yil_ay_key)
+            db_personel_kaydet(personel_listesi)
+            st.session_state['aktif_taslak'] = edited_df
+            st.success(f"✅ {secilen_ay_adi} {secilen_yil} nöbetleri ve personel kadrosu veri tabanına işlendi!")
+            st.rerun()
 
-    # Excel İndirme
+    with tab_cizelge:
+        st.subheader("📅 Aylık Nöbet Dağılım Çizelgesi (X Görünümü)")
+        df_cizelge = cizelge_matrisi_olustur(st.session_state['aktif_taslak'], personel_listesi, secilen_yil, secilen_ay_num)
+        st.dataframe(df_cizelge, use_container_width=True, hide_index=True)
+
+    # Excel İndirme (Hem Liste Hem Çizelge Sayfalı)
     excel_buffer = io.BytesIO()
     with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
-        edited_df.to_excel(writer, sheet_name=f'{secilen_ay_adi}_{secilen_yil}', index=False)
+        st.session_state['aktif_taslak'].to_excel(writer, sheet_name='Nöbet Listesi', index=False)
+        df_cizelge = cizelge_matrisi_olustur(st.session_state['aktif_taslak'], personel_listesi, secilen_yil, secilen_ay_num)
+        df_cizelge.to_excel(writer, sheet_name='Aylık X Çizelgesi', index=False)
 
     st.download_button(
-        label="📥 Bu Ayın Nöbetini Excel Olarak İndir (.xlsx)",
+        label="📥 Bu Ayın Nöbetini ve Çizelgesini Excel Olarak İndir (.xlsx)",
         data=excel_buffer.getvalue(),
-        file_name=f"nobet_{yil_ay_key}.xlsx",
+        file_name=f"nobet_ve_cizelge_{yil_ay_key}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         use_container_width=True
     )
